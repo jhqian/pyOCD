@@ -59,6 +59,7 @@ BOARD_ID_TO_INFO = {
     "0236": BoardInfo(  "LPCXpresso55S69",      "lpc55s69",         "lpcxpresso55s69.bin",  ),
     "0239": BoardInfo(  "FRDM-K32L2B3",         "k32l2b3",          "l1_frdm_k32l2b3.bin",         ),
     "0240": BoardInfo(  "FRDM-K64F",            "k64f",             "l1_k64f.bin",          ),
+    "0244": BoardInfo(  "MIMXRT1170-EVK",       "mimxrt1170_cm7",   "l1_rt1170.bin",          ),
     "0245": BoardInfo(  "IBMEthernetKit",       "k64f",             "l1_k64f.bin"           ),
     "0250": BoardInfo(  "FRDM-KW24D512",        "kw24d5",           "l1_kw24d5.bin"         ),
     "0251": BoardInfo(  "FRDM-KW36",            "kw36z4",           "l1_kw36z.bin",         ),

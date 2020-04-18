@@ -20,6 +20,7 @@ from . import target_MIMXRT1011xxxxx
 from . import target_MIMXRT1015xxxxx
 from . import target_MIMXRT1021xxxxx
 from . import target_MIMXRT1052xxxxB
+from . import target_MIMXRT1176xxxxx
 from . import target_MKE15Z256xxx7
 from . import target_MKE18F256xxx16
 from . import target_MKL02Z32xxx4
@@ -140,6 +141,7 @@ BUILTIN_TARGETS = {
           'mimxrt1050_quadspi': target_MIMXRT1052xxxxB.MIMXRT1052xxxxB_quadspi,
           'mimxrt1050_hyperflash': target_MIMXRT1052xxxxB.MIMXRT1052xxxxB_hyperflash,
           'mimxrt1050': target_MIMXRT1052xxxxB.MIMXRT1052xxxxB_hyperflash, # Alias for default external flash.
+          'mimxrt1170_cm7': target_MIMXRT1176xxxxx.MIMXRT1176xxxxx_CM7,
           'nrf51': target_nRF51822_xxAA.NRF51,
           'nrf52': target_nRF52832_xxAA.NRF52832,
           'nrf52840' : target_nRF52840_xxAA.NRF52840,
