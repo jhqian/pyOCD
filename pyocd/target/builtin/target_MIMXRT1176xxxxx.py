@@ -418,6 +418,7 @@ FLASH_ALGO = {
 class MIMXRT1176xxxxx_CM7(CoreSightTarget):
 
     VENDOR = "NXP"
+    CortexM_IMXRT = None
     
     # Note: itcm, dtcm, and ocram share a single 512 KB block of RAM that can be configurably
     # divided between those regions (this is called FlexRAM). Thus, the memory map regions for
@@ -442,11 +443,10 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
     def create_init_sequence(self):
         seq = super(MIMXRT1176xxxxx_CM7, self).create_init_sequence()
         seq.wrap_task('discovery',
-            lambda seq: seq
-                        .replace_task('find_aps', self.find_aps)
+            lambda seq: seq.replace_task('find_aps', self.find_aps)\
+                    .replace_task('create_cores', self.create_cores)
             )
         return seq
-
     def prepare_cm7_spincode(self, ap):
         # put CM7 spin code
         ap.write32(0x2001FF00, 0x20000000)
@@ -480,6 +480,21 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
         self.prepare_cm4_spincode(ap);
         self.release_cm4(ap);
 
+    def create_cores(self):
+        core0 = CortexM7_IMXRT(self.session, self.aps[0], self.memory_map, 0)
+        core0.default_reset_type = self.ResetType.SW_SYSRESETREQ
+        core1 = CortexM(self.session, self.aps[1], self.memory_map, 1)
+        core1.default_reset_type = self.ResetType.SW
+
+        self.aps[0].core = core0
+        self.aps[1].core = core1
+
+        core0.init()
+        core1.init()
+
+        self.add_core(core0)
+        self.add_core(core1)
+
     def clear_irq(self):
         for i in range(0, 0x20, 4):
             self.aps[0].write32(CortexM.NVIC_ICER0 + i, 0xFFFFFFFF)
@@ -491,32 +506,52 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
     def post_connect_hook(self):
         self.clear_irq()
 
+class CortexM7_IMXRT(CortexM):
+    def __init__(self, session, ap, memoryMap, core_num):
+        super(CortexM7_IMXRT, self).__init__(session, ap, memoryMap, core_num)
+
     def reset_and_halt(self, reset_type=None):
         """! @brief Perform a reset and stop the core on the reset handler."""
         demcr = self.read_memory(CortexM.DEMCR)
         self.write32(CortexM.DEMCR, demcr & ~CortexM.DEMCR_VC_CORERESET)
 
-        # Set breakpoint on user reset handler.
-        t = self.read32(SRC_SBMR2)
-        if t & 0x2000000:
-            LOG.debug("internal boot")
-            t = self.read32(FCFB_ADDR)
-            if t == FCFB:
-                self._reset_handler = self.read32(RESET_HANDLE_ADDR)
-                self.write_memory(FPB_COMP0, self._reset_handler|1)
-                self.write_memory(FPB_CTRL, 0x3)
+        if reset_type is None:
+            reset_type = Target.ResetType.SW_SYSRESETREQ
 
-        # restore GPR19 for CM7 init vect
-        self.write32(IOMUX_GPR19, 0x4000)
+        if (reset_type == Target.ResetType.SW_SYSRESETREQ):
+            # Set breakpoint on user reset handler.
+            t = self.read32(SRC_SBMR2)
+            if t & 0x2000000:
+                LOG.debug("internal boot")
+                t = self.read32(FCFB_ADDR)
+                if t == FCFB:
+                    self._reset_handler = self.read32(RESET_HANDLE_ADDR)
+                    self.write_memory(FPB_COMP0, self._reset_handler|1)
+                    self.write_memory(FPB_CTRL, 0x3)
+                    # restore GPR19 for CM7 init vect
+                    self.write32(IOMUX_GPR19, 0x4000)
+        else:
+            # put CM7 spin code
+            self.write32(0x2001FF00, 0x20000000)
+            self.write32(0x2001FF04, 0x207e11)
+            # Update GPR19
+            self.write32(IOMUX_GPR19, (0x2001FF00 >> 7))
+            LOG.debug("CM7 spincode is ready")
 
         # Perform the reset.
-        mask = CortexM.NVIC_AIRCR_SYSRESETREQ | CortexM.NVIC_AIRCR_VECTRESET
+        mask = CortexM.NVIC_AIRCR_VECTRESET
+        if (reset_type == Target.ResetType.SW_SYSRESETREQ):
+            mask |= CortexM.NVIC_AIRCR_SYSRESETREQ
         self.write_memory(CortexM.NVIC_AIRCR, CortexM.NVIC_AIRCR_VECTKEY | mask)
 
         xpsr = self.read_core_register('xpsr')
-        if xpsr & self.selected_core.XPSR_THUMB == 0:
-            self.write_core_register('xpsr', xpsr | self.selected_core.XPSR_THUMB)
+        if xpsr & self.XPSR_THUMB == 0:
+            self.write_core_register('xpsr', xpsr | self.XPSR_THUMB)
 
-        if t == FCFB:
-            self.write32(FPB_COMP0, 0)
         self.write_memory(CortexM.DEMCR, demcr)
+        if (reset_type == Target.ResetType.SW_SYSRESETREQ):
+            if t == FCFB:
+                self.write32(FPB_COMP0, 0)
+        else:
+            self.halt()
+
