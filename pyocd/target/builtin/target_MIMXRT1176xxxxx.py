@@ -17,13 +17,30 @@
 
 import logging
 
+from ...core.target import Target
 from ...flash.flash import Flash
 from ...core.coresight_target import CoreSightTarget
 from ...core.memory_map import (FlashRegion, RomRegion, RamRegion, MemoryMap)
 from ...debug.svd.loader import SVDFile
 from ...coresight.ap import AccessPort
+from ...coresight.cortex_m import CortexM 
+from ...utility import (cmdline, conversion, timeout)
+from time import (time, sleep)
 
 LOG = logging.getLogger(__name__)
+FCFB = 0x42464346
+FCFB_ADDR = 0x30000400
+RESET_HANDLE_ADDR = 0x30002004
+
+FPB_CTRL = 0xE0002000
+FPB_COMP0 = 0xE0002008
+
+SRC_SCR = 0x40c04000
+SRC_SBMR2 = 0x40c0400c
+
+IOMUX_GPR19 = 0x400E404C
+IOMUX_LPSR_GPR0 = 0x40c0c000
+IOMUX_LPSR_GPR1 = 0x40c0c004
 
 FLASH_ALGO = {
     'load_address' : 0x20200000,
@@ -430,19 +447,12 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
             )
         return seq
 
-    def reset_cm7(self, ap):
-        # Reset CM7
-        ap.write32(0x40C042A4, 1)
-        t = ap.read32(0x40c042b0)
-        while (t & 0x1):
-            t = ap.read32(0x40c042b0)
-
     def prepare_cm7_spincode(self, ap):
         # put CM7 spin code
         ap.write32(0x2001FF00, 0x20000000)
         ap.write32(0x2001FF04, 0x207e11)
         # Update GPR19
-        ap.write32(0x400E404C, (0x2001FF00 >> 7))
+        ap.write32(IOMUX_GPR19, (0x2001FF00 >> 7))
         LOG.debug("CM7 spincode is ready")
 
     def prepare_cm4_spincode(self, ap):
@@ -451,26 +461,14 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
         ap.write32(0x2021FF04, 0x207e11)
 
         # Update LPSR_GPR0 and LPSR_GPR1
-        ap.write32(0x40c0c000, 0xFF00)
-        ap.write32(0x40c0c004, 0x2021)
+        ap.write32(IOMUX_LPSR_GPR0, 0xFF00)
+        ap.write32(IOMUX_LPSR_GPR1, 0x2021)
         LOG.debug("CM4 spincode is ready")
 
     def release_cm4(self, ap):
         # release CM4
-        ap.write32(0x40c04000, 1)
+        ap.write32(SRC_SCR, 1)
         LOG.debug("CM4 is released")
-
-    def set_cm7_reset_mode(self, ap, mode):
-        self.set_reset_mode(ap, mode, 0x3, 12)
-
-    def set_cm4_reset_mode(self, ap, mode):
-        self.set_reset_mode(ap, mode, 0x3, 10)
-
-    def set_reset_mode(self, ap, mode, mask, shift):
-        t = ap.read32(0x40c04004)
-        t &= ~(mask << shift);
-        t |= ((mode & mask) << shift)
-        ap.write32(0x40c04004, t)
 
     def find_aps(self):
         if self.dp.valid_aps is not None:
@@ -482,11 +480,43 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
         self.prepare_cm4_spincode(ap);
         self.release_cm4(ap);
 
+    def clear_irq(self):
+        for i in range(0, 0x20, 4):
+            self.aps[0].write32(CortexM.NVIC_ICER0 + i, 0xFFFFFFFF)
+
+        for i in range(0, 0x20, 4):
+            self.aps[0].write32(CortexM.NVIC_ICPR0 + i, 0xFFFFFFFF)
+        LOG.debug("IRQs are cleared");
+
     def post_connect_hook(self):
-        for i in range(0x80, 0xA0, 4):
-            self.aps[0].write32(0xE000E100 + i, 0xFFFFFFFF)
+        self.clear_irq()
 
-        for i in range(0x180, 0x1A0, 4):
-            self.aps[0].write32(0xE000E100 + i, 0xFFFFFFFF)
+    def reset_and_halt(self, reset_type=None):
+        """! @brief Perform a reset and stop the core on the reset handler."""
+        demcr = self.read_memory(CortexM.DEMCR)
+        self.write32(CortexM.DEMCR, demcr & ~CortexM.DEMCR_VC_CORERESET)
 
-        LOG.debug("clear IRQ");
+        # Set breakpoint on user reset handler.
+        t = self.read32(SRC_SBMR2)
+        if t & 0x2000000:
+            LOG.debug("internal boot")
+            t = self.read32(FCFB_ADDR)
+            if t == FCFB:
+                self._reset_handler = self.read32(RESET_HANDLE_ADDR)
+                self.write_memory(FPB_COMP0, self._reset_handler|1)
+                self.write_memory(FPB_CTRL, 0x3)
+
+        # restore GPR19 for CM7 init vect
+        self.write32(IOMUX_GPR19, 0x4000)
+
+        # Perform the reset.
+        mask = CortexM.NVIC_AIRCR_SYSRESETREQ | CortexM.NVIC_AIRCR_VECTRESET
+        self.write_memory(CortexM.NVIC_AIRCR, CortexM.NVIC_AIRCR_VECTKEY | mask)
+
+        xpsr = self.read_core_register('xpsr')
+        if xpsr & self.selected_core.XPSR_THUMB == 0:
+            self.write_core_register('xpsr', xpsr | self.selected_core.XPSR_THUMB)
+
+        if t == FCFB:
+            self.write32(FPB_COMP0, 0)
+        self.write_memory(CortexM.DEMCR, demcr)
