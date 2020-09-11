@@ -22,7 +22,7 @@ from ...flash.flash import Flash
 from ...core.coresight_target import CoreSightTarget
 from ...core.memory_map import (FlashRegion, RomRegion, RamRegion, MemoryMap)
 from ...debug.svd.loader import SVDFile
-from ...coresight.ap import AccessPort
+from ...coresight.ap import AccessPort, APv1Address
 from ...coresight.cortex_m import CortexM 
 from ...utility import (cmdline, conversion, timeout)
 from time import (time, sleep)
@@ -447,23 +447,6 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
                     .replace_task('create_cores', self.create_cores)
             )
         return seq
-    def prepare_cm7_spincode(self, ap):
-        # put CM7 spin code
-        ap.write32(0x2001FF00, 0x20000000)
-        ap.write32(0x2001FF04, 0x207e11)
-        # Update GPR19
-        ap.write32(IOMUX_GPR19, (0x2001FF00 >> 7))
-        LOG.debug("CM7 spincode is ready")
-
-    def prepare_cm4_spincode(self, ap):
-        # put CM4 spin code
-        ap.write32(0x2021FF00, 0x20000000)
-        ap.write32(0x2021FF04, 0x207e11)
-
-        # Update LPSR_GPR0 and LPSR_GPR1
-        ap.write32(IOMUX_LPSR_GPR0, 0xFF00)
-        ap.write32(IOMUX_LPSR_GPR1, 0x2021)
-        LOG.debug("CM4 spincode is ready")
 
     def release_cm4(self, ap):
         # release CM4
@@ -474,10 +457,8 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
         if self.dp.valid_aps is not None:
             return
         self.dp.valid_aps = [0,1,2]
-        ap = AccessPort.create(self.dp, 0)
+        ap = AccessPort.create(self.dp, APv1Address(0))
 
-        self.prepare_cm7_spincode(ap);
-        self.prepare_cm4_spincode(ap);
         self.release_cm4(ap);
 
     def create_cores(self):
@@ -494,17 +475,6 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
 
         self.add_core(core0)
         self.add_core(core1)
-
-    def clear_irq(self):
-        for i in range(0, 0x20, 4):
-            self.aps[0].write32(CortexM.NVIC_ICER0 + i, 0xFFFFFFFF)
-
-        for i in range(0, 0x20, 4):
-            self.aps[0].write32(CortexM.NVIC_ICPR0 + i, 0xFFFFFFFF)
-        LOG.debug("IRQs are cleared");
-
-    def post_connect_hook(self):
-        self.clear_irq()
 
 class CortexM7_IMXRT(CortexM):
     def __init__(self, session, ap, memoryMap, core_num):
@@ -528,15 +498,6 @@ class CortexM7_IMXRT(CortexM):
                     self._reset_handler = self.read32(RESET_HANDLE_ADDR)
                     self.write_memory(FPB_COMP0, self._reset_handler|1)
                     self.write_memory(FPB_CTRL, 0x3)
-                    # restore GPR19 for CM7 init vect
-                    self.write32(IOMUX_GPR19, 0x4000)
-        else:
-            # put CM7 spin code
-            self.write32(0x2001FF00, 0x20000000)
-            self.write32(0x2001FF04, 0x207e11)
-            # Update GPR19
-            self.write32(IOMUX_GPR19, (0x2001FF00 >> 7))
-            LOG.debug("CM7 spincode is ready")
 
         # Perform the reset.
         mask = CortexM.NVIC_AIRCR_VECTRESET
