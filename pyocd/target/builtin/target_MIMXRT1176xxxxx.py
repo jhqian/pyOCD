@@ -445,10 +445,28 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
             )
         return seq
 
+    def prepare_cm4_trap_code(self, ap):
+        start = 0x20250000
+        ap.write32(start, start + 0x20)
+        ap.write32(start + 4, 0x23F041)
+        ap.write32(IOMUX_LPSR_GPR0, start & 0xFFFF)
+        ap.write32(IOMUX_LPSR_GPR1, (start & 0xFFFF0000) >> 16)
+
     def release_cm4(self, ap):
         # release CM4
         ap.write32(SRC_SCR, 1)
         LOG.debug("CM4 is released")
+
+    def prepare_cm7_trap_code(self, ap):
+        start = 0x2001FF00
+        ap.write32(start, start + 0x20)
+        ap.write32(start + 4, 0x223105)
+        ap.write32(IOMUX_LPSR_GPR26, start >> 7)
+
+    def update_sbmr(self, ap):
+        sbmr = ap.read32(SRC_SBMR)
+        sbmr |= (0xF << 10);
+        ap.write32(SRC_SBMR, sbmr)
 
     def find_aps(self):
         if self.dp.valid_aps is not None:
@@ -457,13 +475,16 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
         self.dp.valid_aps = [0,1,2]
         ap = AccessPort.create(self.dp, APv1Address(0))
 
-        self.release_cm4(ap);
+        self.prepare_cm7_trap_code(ap)
+        self.prepare_cm4_trap_code(ap)
+        self.release_cm4(ap)
+        self.update_sbmr(ap)
 
     def create_cores(self):
-        core0 = CortexM7_IMXRT(self.session, self.aps[0], self.memory_map, 0)
-        core0.default_reset_type = self.ResetType.SW
+        core0 = CortexM(self.session, self.aps[0], self.memory_map, 0)
+        core0.default_reset_type = self.ResetType.SW_CORE
         core1 = CortexM(self.session, self.aps[1], self.memory_map, 1)
-        core1.default_reset_type = self.ResetType.SW
+        core1.default_reset_type = self.ResetType.SW_CORE
 
         self.aps[0].core = core0
         self.aps[1].core = core1
@@ -473,53 +494,4 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
 
         self.add_core(core0)
         self.add_core(core1)
-
-class CortexM7_IMXRT(CortexM):
-    def __init__(self, session, ap, memoryMap, core_num):
-        super(CortexM7_IMXRT, self).__init__(session, ap, memoryMap, core_num)
-        self.write_memory(0x2001FF00, 0x20250000)
-        self.write_memory(0x2001FF04, 0x223105)
-        self.write_memory(IOMUX_LPSR_GPR26, 0x4003FE)
-        sbmr = self.read_memory(SRC_SBMR)
-        sbmr |= (0xF << 10);
-        self.write_memory(SRC_SBMR, sbmr)
-
-    def reset_and_halt(self, reset_type=None):
-        """! @brief Perform a reset and stop the core on the reset handler."""
-        demcr = self.read_memory(CortexM.DEMCR)
-        self.write_memory(CortexM.DEMCR, demcr & ~CortexM.DEMCR_VC_CORERESET)
-
-        if reset_type is None:
-            reset_type = Target.ResetType.SW_SYSRESETREQ
-
-        if (reset_type == Target.ResetType.SW_SYSRESETREQ):
-            # Set breakpoint on user reset handler.
-            t = self.read_memory(SRC_SBMR2)
-            if t & 0x2000000:
-                LOG.debug("internal boot")
-                t = self.read_memory(FCFB_ADDR)
-                if t == FCFB:
-                    self._reset_handler = self.read_memory(RESET_HANDLE_ADDR)
-                    self.write_memory(FPB_COMP0, self._reset_handler|1)
-                    self.write_memory(FPB_CTRL, 0x3)
-
-        # Perform the reset.
-        if (reset_type == Target.ResetType.SW_SYSRESETREQ):
-            mask = CortexM.NVIC_AIRCR_SYSRESETREQ
-        elif (reset_type == Target.ResetType.SW):
-            mask = CortexM.NVIC_AIRCR_VECTRESET
-        self.write_memory(CortexM.NVIC_AIRCR, CortexM.NVIC_AIRCR_VECTKEY | mask)
-
-        self.halt()
-
-        xpsr = self.read_core_register('xpsr')
-        if xpsr & self.XPSR_THUMB == 0:
-            self.write_core_register('xpsr', xpsr | self.XPSR_THUMB)
-
-        self.write_memory(CortexM.DEMCR, demcr)
-        if (reset_type == Target.ResetType.SW_SYSRESETREQ):
-            if t == FCFB:
-                self.write_memory(FPB_COMP0, 0)
-        else:
-            self.halt()
 
