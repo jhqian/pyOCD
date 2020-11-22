@@ -851,17 +851,12 @@ class MIMXRT1176xxxxx_CM7(CoreSightTarget):
     def create_cores(self):
         core0 = CortexM(self.session, self.aps[0], self.memory_map, 0)
         core0.default_reset_type = self.ResetType.SW_CORE
-        core1 = CortexM(self.session, self.aps[1], self.memoryMap_core1, 1)
-        core1.default_reset_type = self.ResetType.SW_CORE
 
         self.aps[0].core = core0
-        self.aps[1].core = core1
 
         core0.init()
-        core1.init()
 
         self.add_core(core0)
-        self.add_core(core1)
 
 class MIMXRT1176xxxxx_CM4(CoreSightTarget):
 
